@@ -1,113 +1,119 @@
 package httpjson
 
 import (
+	"context"
 	"fmt"
 	"keeper/services/keeper"
+	"log"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
-
-	"github.com/labstack/echo/v4"
-	"github.com/labstack/echo/v4/middleware"
-	"github.com/labstack/gommon/log"
 )
 
 // Handler defines the httpjson handler
 type Handler struct {
-	echo   *echo.Echo
+	server *http.Server
 	keeper *keeper.Service
 }
 
 func New(keeper *keeper.Service) *Handler {
-	e := echo.New()
 	h := &Handler{
-		echo:   e,
 		keeper: keeper,
 	}
 
-	h.initMiddleware()
+	return h.init()
+}
+
+func (h *Handler) init() *Handler {
+	mux := http.NewServeMux()
+
+	h.server = &http.Server{
+		Handler: h.logMiddleware(h.userSettingsMiddleware(h.apiKeyMiddleware(h.proxyMiddleware(mux)))),
+	}
 
 	return h
 }
 
-func (h *Handler) initMiddleware() {
-	h.echo.Logger.SetLevel(log.DEBUG)
-	h.echo.Use(middleware.Logger())
-
-	// enrich the request with user settings
-	h.echo.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
-			settings, err := h.keeper.GetUserSettings(c.Request().Context(), 1)
-			if err != nil {
-				return echo.NewHTTPError(http.StatusInternalServerError, "failed to get user settings")
-			}
-
-			c.Set("settings", settings)
-
-			return next(c)
-		}
+func (h *Handler) logMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		log.Printf("Request: %s %s", r.Method, r.URL.Path)
+		next.ServeHTTP(w, r)
 	})
+}
 
-	// add the api key to the request header
-	h.echo.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
-			settings, ok := c.Get("settings").(keeper.UserSettings)
-			if !ok {
-				return echo.NewHTTPError(http.StatusInternalServerError, "failed to get user settings")
-			}
+func (h *Handler) userSettingsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
 
-			c.Request().Header.Set("Authorization", fmt.Sprintf("Bearer %s", *settings.ApiKey))
-
-			return next(c)
+		settings, err := h.keeper.GetUserSettings(ctx, 1)
+		if err != nil {
+			http.Error(w, "failed to get user settings", http.StatusInternalServerError)
+			return
 		}
+
+		next.ServeHTTP(w, r.WithContext(
+			context.WithValue(ctx, "settings", settings),
+		))
 	})
+}
 
-	h.echo.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
-			settings, ok := c.Get("settings").(keeper.UserSettings)
-			if !ok {
-				return echo.NewHTTPError(http.StatusInternalServerError, "failed to get user settings")
-			}
-
-			targetURL, err := url.Parse(settings.BaseURL)
-			if err != nil {
-				return echo.NewHTTPError(http.StatusInternalServerError, "invalid target URL")
-			}
-
-			h.echo.Logger.Debugf("Proxying to %s", targetURL)
-
-			proxyConfig := middleware.ProxyConfig{
-				Balancer: middleware.NewRoundRobinBalancer([]*middleware.ProxyTarget{
-					{
-						URL: targetURL,
-					},
-				}),
-				Rewrite: map[string]string{
-					"^/*": "/$1",
-				},
-				Transport: &http.Transport{
-					Proxy: http.ProxyFromEnvironment,
-				},
-			}
-
-			proxyMiddleware := middleware.ProxyWithConfig(proxyConfig)
-
-			return proxyMiddleware(next)(c)
+func (h *Handler) apiKeyMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		settings, ok := r.Context().Value("settings").(keeper.UserSettings)
+		if !ok {
+			http.Error(w, "failed to get user settings", http.StatusInternalServerError)
+			return
 		}
+
+		r.Header.Set("Authorization", fmt.Sprintf("Bearer %s", *settings.ApiKey))
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (h *Handler) proxyMiddleware(_ http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		settings, ok := r.Context().Value("settings").(keeper.UserSettings)
+		if !ok {
+			http.Error(w, "failed to get user settings", http.StatusInternalServerError)
+			return
+		}
+
+		var targetURL *url.URL
+		if r.URL.Query().Get("debug") == "true" {
+			targetURL = &url.URL{
+				Scheme: "http",
+				Host:   "localhost:3000",
+			}
+		} else {
+			url, err := url.Parse(settings.BaseURL)
+			if err != nil {
+				http.Error(w, "invalid target URL", http.StatusInternalServerError)
+				return
+			}
+			targetURL = url
+		}
+
+		log.Printf("Proxying to %s", targetURL)
+
+		proxy := &httputil.ReverseProxy{
+			Rewrite: func(r *httputil.ProxyRequest) {
+				r.SetURL(targetURL)
+			},
+		}
+
+		proxy.ServeHTTP(w, r)
 	})
 }
 
 func (h *Handler) Start(addr string) {
-	h.echo.Logger.Debug("Starting server")
-
-	if err := h.echo.Start(addr); err != nil && err != http.ErrServerClosed {
-		h.echo.Logger.Fatal("shutting down the server: ", err)
+	log.Printf("Starting server on %s", addr)
+	h.server.Addr = addr
+	if err := h.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Fatalf("shutting down the server: %v", err)
 	}
 }
 
 func (h *Handler) Stop() error {
-	if err := h.echo.Shutdown(nil); err != nil {
-		return err
-	}
-
-	return nil
+	return h.server.Shutdown(context.Background())
 }

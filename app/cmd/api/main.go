@@ -11,7 +11,6 @@ import (
 )
 
 func main() {
-
 	repo, err := keeper.NewRepository(keeper.DBOptions{
 		Host:     "localhost",
 		Port:     5432,
@@ -22,8 +21,6 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-
-	seedDB(repo)
 
 	keeper := keeper.NewService(repo)
 
