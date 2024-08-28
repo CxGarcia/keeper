@@ -182,16 +182,20 @@ func Infof(format string, v ...interface{}) {
 	}
 }
 
-func Error(v ...interface{}) {
+func Error(v ...interface{}) (err error) {
 	if logger != nil {
 		logger.log(LogLevelError, v...)
 	}
+
+	return fmt.Errorf("%v", v...)
 }
 
-func Errorf(format string, v ...interface{}) {
+func Errorf(format string, v ...interface{}) (err error) {
 	if logger != nil {
 		logger.logf(LogLevelError, format, v...)
 	}
+
+	return fmt.Errorf(format, v...)
 }
 
 func Fatal(v ...interface{}) {

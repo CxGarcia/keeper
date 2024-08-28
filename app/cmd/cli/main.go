@@ -28,7 +28,11 @@ func main() {
 		log.Fatalf("failed to process env vars: %v", err)
 	}
 
-	log.Init(cfg.Log.Level, cfg.Log.File, cfg.Log.BufSize, cfg.Log.FlushInterval)
+	log.Init(
+		cfg.Log.Level, cfg.Log.File, cfg.Log.BufSize, cfg.Log.FlushInterval,
+	)
+
+	defer log.Close()
 
 	repo, err := keeper.NewRepository(keeper.DBOptions{
 		Database: cfg.Database.Name,
@@ -37,6 +41,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to create repository: %v", err)
 	}
+
+	defer repo.Close()
 
 	proxyService := proxy.New(repo)
 

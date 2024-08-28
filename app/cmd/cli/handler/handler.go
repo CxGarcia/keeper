@@ -1,13 +1,13 @@
 package cli
 
 import (
-	_ "embed"
+	"syscall"
 
 	"context"
+	_ "embed"
 	"fmt"
 	"os"
 	"strings"
-	"syscall"
 
 	log "keeper/internal/logger"
 	"keeper/services/keeper"
@@ -23,7 +23,8 @@ type proxyService interface {
 }
 
 type Handler struct {
-	keeper       *keeper.Repository
+	keeper *keeper.Repository
+
 	proxyService proxyService
 }
 
@@ -48,6 +49,12 @@ func (h *Handler) Run() error {
 						Aliases: []string{"p"},
 						Value:   "8080",
 						Usage:   "Port to run the server on",
+					},
+					&cli.BoolFlag{
+						Name:    "detached",
+						Aliases: []string{"d"},
+						Value:   false,
+						Usage:   "Run the server in detached mode",
 					},
 				},
 				Action: h.startServer,
@@ -83,22 +90,6 @@ func (h *Handler) Run() error {
 	}
 
 	return app.Run(os.Args)
-}
-func (h *Handler) startServer(c *cli.Context) error {
-	addr := fmt.Sprintf(":%s", c.String("port"))
-	if err := h.proxyService.Start(addr); err != nil {
-		log.Fatalf("error starting server: %v", err)
-	}
-
-	return nil
-}
-
-func (h *Handler) stopServer(c *cli.Context) error {
-	if err := h.proxyService.Stop(); err != nil {
-		return err
-	}
-
-	return nil
 }
 
 func (h *Handler) seedDB(c *cli.Context) error {
