@@ -1,8 +1,11 @@
 package main
 
 import (
+	"context"
 	cli "keeper/cmd/cli/handler"
+	"keeper/internal/database"
 	log "keeper/internal/logger"
+	provider_registry "keeper/internal/provider-registry"
 	"keeper/services/keeper"
 	"keeper/services/proxy"
 	"time"
@@ -23,6 +26,8 @@ type config struct {
 }
 
 func main() {
+	ctx := context.Background()
+
 	var cfg config
 	if err := envconfig.Process("", &cfg); err != nil {
 		log.Fatalf("failed to process env vars: %v", err)
@@ -34,15 +39,28 @@ func main() {
 
 	defer log.Close()
 
-	repo, err := keeper.NewRepository(keeper.DBOptions{
-		Database: cfg.Database.Name,
-	})
+	reg, err := provider_registry.New()
+	if err != nil {
+		log.Fatalf("failed to load provider registry: %v", err)
+	}
 
+	db, err := database.NewSQLite(database.Options{Database: cfg.Database.Name})
+	if err != nil {
+		log.Fatalf("failed to create database: %v", err)
+	}
+
+	defer db.Close()
+
+	repo, err := keeper.NewSQLite(db)
 	if err != nil {
 		log.Fatalf("failed to create repository: %v", err)
 	}
 
 	defer repo.Close()
+
+	if err := database.Seed(ctx, db, repo, reg); err != nil {
+		log.Fatalf("failed to seed database: %v", err)
+	}
 
 	proxyService := proxy.New(repo)
 

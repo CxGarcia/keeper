@@ -13,10 +13,10 @@ import (
 // Service defines the proxy handler
 type Service struct {
 	server *http.Server
-	keeper *keeper.Repository
+	keeper *keeper.SQLiteRepository
 }
 
-func New(keeper *keeper.Repository) *Service {
+func New(keeper *keeper.SQLiteRepository) *Service {
 	h := &Service{
 		keeper: keeper,
 	}
