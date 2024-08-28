@@ -13,10 +13,10 @@ import (
 // Service defines the proxy handler
 type Service struct {
 	server *http.Server
-	keeper *keeper.Service
+	keeper *keeper.Repository
 }
 
-func New(keeper *keeper.Service) *Service {
+func New(keeper *keeper.Repository) *Service {
 	h := &Service{
 		keeper: keeper,
 	}
@@ -49,6 +49,9 @@ func (h *Service) userSettingsMiddleware(next http.Handler) http.Handler {
 		settings, err := h.keeper.GetUserSettings(ctx, 1)
 		if err != nil {
 			http.Error(w, "failed to get user settings", http.StatusInternalServerError)
+
+			log.Errorf("failed to get user settings: %v", err)
+
 			return
 		}
 
@@ -66,7 +69,7 @@ func (h *Service) apiKeyMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		r.Header.Set("Authorization", fmt.Sprintf("Bearer %s", *settings.ApiKey))
+		r.Header.Set("Authorization", fmt.Sprintf("Bearer %s", settings.Secret))
 
 		next.ServeHTTP(w, r)
 	})
@@ -77,6 +80,7 @@ func (h *Service) proxyMiddleware(_ http.Handler) http.Handler {
 		settings, ok := r.Context().Value("settings").(keeper.UserSettings)
 		if !ok {
 			http.Error(w, "failed to get user settings", http.StatusInternalServerError)
+
 			return
 		}
 
@@ -100,6 +104,10 @@ func (h *Service) proxyMiddleware(_ http.Handler) http.Handler {
 		proxy := &httputil.ReverseProxy{
 			Rewrite: func(r *httputil.ProxyRequest) {
 				r.SetURL(targetURL)
+			},
+			ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+				http.Error(w, "failed to proxy request", http.StatusInternalServerError)
+				log.Errorf("failed to proxy request: %v", err)
 			},
 		}
 
