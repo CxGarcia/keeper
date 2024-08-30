@@ -46,7 +46,7 @@ func (h *Service) userSettingsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 
-		settings, err := h.keeper.GetUserSettings(ctx, 1)
+		settings, err := h.keeper.GetProfileSettingsWithKey(ctx, 1)
 		if err != nil {
 			http.Error(w, "failed to get user settings", http.StatusInternalServerError)
 
@@ -63,7 +63,7 @@ func (h *Service) userSettingsMiddleware(next http.Handler) http.Handler {
 
 func (h *Service) apiKeyMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		settings, ok := r.Context().Value("settings").(keeper.UserSettings)
+		settings, ok := r.Context().Value("settings").(keeper.ProfileSettings)
 		if !ok {
 			http.Error(w, "failed to get user settings", http.StatusInternalServerError)
 			return
@@ -77,7 +77,7 @@ func (h *Service) apiKeyMiddleware(next http.Handler) http.Handler {
 
 func (h *Service) proxyMiddleware(_ http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		settings, ok := r.Context().Value("settings").(keeper.UserSettings)
+		settings, ok := r.Context().Value("settings").(keeper.ProfileSettings)
 		if !ok {
 			http.Error(w, "failed to get user settings", http.StatusInternalServerError)
 

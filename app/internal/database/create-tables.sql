@@ -1,3 +1,13 @@
+
+CREATE TABLE IF NOT EXISTS `profiles` (
+    `id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+    `name` text NOT NULL UNIQUE,
+    `is_active` integer DEFAULT 0,
+    `is_default` integer DEFAULT 0,
+    `created_at` text DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    `updated_at` text DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS `providers` (
     `id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
     `name` text NOT NULL UNIQUE,
@@ -7,28 +17,22 @@ CREATE TABLE IF NOT EXISTS `providers` (
     `updated_at` text DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS `users` (
+CREATE TABLE IF NOT EXISTS `profile_settings` (
     `id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
-    `name` text NOT NULL,
-    `created_at` text DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    `updated_at` text DEFAULT CURRENT_TIMESTAMP NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS `user_settings` (
-    `id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
-    `user_id` integer,
-    `selected_provider_id` integer,
+    `profile_id` integer NOT NULL,
+    `provider_id` integer,
+    `provider_key_id` integer,
     `force_selected_provider` integer DEFAULT 0,
     `created_at` text DEFAULT CURRENT_TIMESTAMP NOT NULL,
     `updated_at` text DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE no action,
-    FOREIGN KEY (`selected_provider_id`) REFERENCES `providers`(`id`) ON UPDATE no action ON DELETE no action
+    FOREIGN KEY (`profile_id`) REFERENCES `profiles`(`id`) ON UPDATE no action ON DELETE CASCADE,
+    FOREIGN KEY (`provider_id`) REFERENCES `providers`(`id`) ON UPDATE no action ON DELETE SET NULL,
+    FOREIGN KEY (`provider_key_id`) REFERENCES `provider_keys`(`id`) ON UPDATE no action ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS `provider_keys` (
     `id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
-    `user_id` integer,
-    `provider_id` integer,
+    `provider_id` integer NOT NULL,
     `name` text,
     `secret` text NOT NULL,
     `is_active` integer DEFAULT 1,
@@ -37,11 +41,18 @@ CREATE TABLE IF NOT EXISTS `provider_keys` (
     `last_used_at` text,
     `created_at` text DEFAULT CURRENT_TIMESTAMP NOT NULL,
     `updated_at` text DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE CASCADE,
     FOREIGN KEY (`provider_id`) REFERENCES `providers`(`id`) ON UPDATE no action ON DELETE CASCADE
 );
 
-CREATE INDEX idx_user_settings_user_id ON user_settings(user_id);
-CREATE INDEX idx_user_settings_selected_provider_id ON user_settings(selected_provider_id);
-CREATE INDEX idx_provider_keys_user_id ON provider_keys(user_id);
+CREATE TABLE IF NOT EXISTS `runtime_info` (
+    `id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+    `data` text NOT NULL,
+    `created_at` text DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    `updated_at` text DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+
+CREATE INDEX idx_profile_settings_profile_id ON profile_settings(profile_id);
+CREATE INDEX idx_profile_settings_provider_id ON profile_settings(provider_id);
+CREATE INDEX idx_profile_settings_provider_key_id ON profile_settings(provider_key_id);
 CREATE INDEX idx_provider_keys_provider_id ON provider_keys(provider_id);
+CREATE INDEX idx_runtime_info_created_at ON runtime_info(created_at);

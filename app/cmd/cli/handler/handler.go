@@ -119,9 +119,11 @@ func (h *Handler) setKeyInteractive(c *cli.Context) error {
 		return log.Errorf("error getting provider: %w", err)
 	}
 
-	if _, err := h.keeper.CreateKey(c.Context, provider.Name, value); err != nil {
+	if _, err := h.keeper.CreateProviderKey(c.Context, *provider, value); err != nil {
 		return log.Errorf("error setting key: %w", err)
 	}
+
+	log.Infof("key successfully created")
 
 	return nil
 }

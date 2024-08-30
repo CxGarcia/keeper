@@ -56,8 +56,6 @@ func main() {
 		log.Fatalf("failed to create repository: %v", err)
 	}
 
-	defer repo.Close()
-
 	if err := database.Seed(ctx, db, repo, reg); err != nil {
 		log.Fatalf("failed to seed database: %v", err)
 	}

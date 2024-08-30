@@ -12,14 +12,15 @@ type SQLiteRepository struct {
 	db *sql.DB
 }
 
-// User
-type User struct {
-	ID   int64  `db:"id"`
-	Name string `db:"name"`
+type Profile struct {
+	ID        int64  `db:"id"`
+	Name      string `db:"name"`
+	IsActive  bool   `db:"is_active"`
+	IsDefault bool   `db:"is_default"`
 }
 
-// Key
-type Key struct {
+// ProviderKey
+type ProviderKey struct {
 	ID     int64  `db:"id"`
 	Name   string `db:"name"`
 	Secret string `db:"secret"`
@@ -27,7 +28,7 @@ type Key struct {
 
 // Provider
 type Provider struct {
-	Key
+	ProviderKey
 
 	ID            int64   `db:"id"`
 	Name          string  `db:"name"`
@@ -42,12 +43,11 @@ type UpdateProviderRequest struct {
 	SelectedKeyID int64
 }
 
-// UserSettings
-type UserSettings struct {
+type ProfileSettings struct {
 	Provider
 
-	UserID             int64 `db:"user_id"`
-	SelectedProviderID int64 `db:"selected_provider_id"`
+	ProfileID  int64 `db:"user_id"`
+	ProviderID int64 `db:"selected_provider_id"`
 }
 
 type UpdateUserSettingsRequest struct {
@@ -58,15 +58,16 @@ func NewSQLite(db *sql.DB) (*SQLiteRepository, error) {
 	return &SQLiteRepository{db: db}, nil
 }
 
-// User repository
-func (r *SQLiteRepository) CreateUser(ctx context.Context, name string) (int64, error) {
-	if name == "" {
-		return 0, logger.Errorf("name cannot be empty")
-	}
+type CreateProfileReq struct {
+	Name      string
+	IsActive  bool
+	IsDefault bool
+}
 
-	result, err := r.db.ExecContext(ctx, "INSERT INTO users (name) VALUES ($1)", name)
+func (r *SQLiteRepository) CreateProfile(ctx context.Context, req CreateProfileReq) (int64, error) {
+	result, err := r.db.ExecContext(ctx, "INSERT INTO profiles (name, is_active, is_default) VALUES ($1, $2, $3)", req.Name, req.IsActive, req.IsDefault)
 	if err != nil {
-		return 0, logger.Errorf("failed to create user: %w", err)
+		return 0, logger.Errorf("failed to create profile: %w", err)
 	}
 
 	id, err := result.LastInsertId()
@@ -77,33 +78,13 @@ func (r *SQLiteRepository) CreateUser(ctx context.Context, name string) (int64, 
 	return id, nil
 }
 
-func (r *SQLiteRepository) GetUser(ctx context.Context, id int64) (*User, error) {
-	if id <= 0 {
-		return nil, logger.Errorf("invalid user ID")
-	}
-
-	var user User
-	err := r.db.QueryRowContext(ctx, "SELECT name FROM users WHERE id = $1", id).Scan(&user.Name)
-	if err != nil {
-		switch {
-			case err == sql.ErrNoRows:
-				return nil, logger.Errorf("user not found")
-			default:
-				return nil, logger.Errorf("failed to get user: %w", err
-		}
-	}
-
-	user.ID = id
-	return &user, nil
-}
-
 // Key repository
-func (r *SQLiteRepository) CreateKey(ctx context.Context, name, secret string) (int64, error) {
+func (r *SQLiteRepository) CreateProviderKey(ctx context.Context, provider Provider, secret string) (int64, error) {
 	if secret == "" {
 		return 0, logger.Errorf("secret cannot be empty")
 	}
 
-	result, err := r.db.ExecContext(ctx, "INSERT INTO provider_keys (name, secret) VALUES ($1, $2)", name, secret)
+	result, err := r.db.ExecContext(ctx, "INSERT INTO provider_keys (provider_id, name, secret) VALUES ($1, $2, $3)", provider.ID, provider.Name, secret)
 	if err != nil {
 		return 0, logger.Errorf("failed to create key: %w", err)
 	}
@@ -114,19 +95,6 @@ func (r *SQLiteRepository) CreateKey(ctx context.Context, name, secret string) (
 	}
 
 	return id, nil
-}
-
-func (r *SQLiteRepository) DeleteKey(ctx context.Context, id int64) error {
-	if id <= 0 {
-		return logger.Errorf("invalid key ID")
-	}
-
-	_, err := r.db.ExecContext(ctx, "DELETE FROM provider_keys WHERE id = $1", id)
-	if err != nil {
-		return logger.Errorf("failed to delete key: %w", err)
-	}
-
-	return nil
 }
 
 // Provider repository
@@ -163,39 +131,6 @@ func (r *SQLiteRepository) CreateProviders(ctx context.Context, providers ...Pro
 	return ids, nil
 }
 
-func (r *SQLiteRepository) UpdateProvider(ctx context.Context, id int64, provider UpdateProviderRequest) error {
-	if id <= 0 {
-		return logger.Errorf("invalid provider ID")
-	}
-
-	_, err := r.db.ExecContext(ctx, "UPDATE providers SET base_url = $1, selected_key_id = $2, model = $3 WHERE id = $4", provider.BaseURL, provider.SelectedKeyID, provider.Model, id)
-	if err != nil {
-		return logger.Errorf("failed to update provider: %w", err)
-	}
-
-	return nil
-}
-
-func (r *SQLiteRepository) GetProvider(ctx context.Context, id int64) (*Provider, error) {
-	if id <= 0 {
-		return nil, logger.Errorf("invalid provider ID")
-	}
-
-	var provider Provider
-	err := r.db.QueryRowContext(ctx, "SELECT name, base_url, selected_key_id, model FROM providers WHERE id = $1", id).Scan(&provider.Name, &provider.BaseURL, &provider.SelectedKeyID, &provider.Model)
-	if err != nil {
-		switch {
-		case err == sql.ErrNoRows:
-			return nil, logger.Errorf("provider not found")
-		default:
-			return nil, logger.Errorf("failed to get provider: %w", err)
-		}
-	}
-
-	provider.ID = id
-	return &provider, nil
-}
-
 func (r *SQLiteRepository) GetProviderByName(ctx context.Context, name string) (*Provider, error) {
 	if name == "" {
 		return nil, logger.Errorf("provider name cannot be empty")
@@ -227,7 +162,7 @@ func (r *SQLiteRepository) GetProviderByNameWithKey(ctx context.Context, name st
 		FROM providers p
 		JOIN provider_keys k ON p.selected_key_id = k.id
 		WHERE p.name = $1`, name).Scan(
-		&provider.ID, &provider.BaseURL, &provider.SelectedKeyID, &provider.Model, &provider.Key.Name, &provider.Secret,
+		&provider.ID, &provider.BaseURL, &provider.SelectedKeyID, &provider.Model, &provider.ProviderKey.Name, &provider.Secret,
 	)
 	if err != nil {
 		switch {
@@ -243,36 +178,13 @@ func (r *SQLiteRepository) GetProviderByNameWithKey(ctx context.Context, name st
 	return &provider, nil
 }
 
-func (r *SQLiteRepository) ListProviders(ctx context.Context) ([]Provider, error) {
-	rows, err := r.db.QueryContext(ctx, "SELECT name, base_url, selected_key_id, model FROM providers")
-	if err != nil {
-		return nil, logger.Errorf("failed to list providers: %w", err)
-	}
-	defer rows.Close()
-
-	var providers []Provider
-	for rows.Next() {
-		var provider Provider
-		if err := rows.Scan(&provider.Name, &provider.BaseURL, &provider.SelectedKeyID, &provider.Model); err != nil {
-			return nil, logger.Errorf("failed to scan provider: %w", err)
-		}
-		providers = append(providers, provider)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, logger.Errorf("error iterating providers: %w", err)
-	}
-
-	return providers, nil
-}
-
 // User settings repository
-func (r *SQLiteRepository) CreateUserSettings(ctx context.Context, userSettings UserSettings) (int64, error) {
-	if userSettings.UserID <= 0 || userSettings.SelectedProviderID <= 0 {
+func (r *SQLiteRepository) CreateProfileSettings(ctx context.Context, userSettings ProfileSettings) (int64, error) {
+	if userSettings.ProfileID <= 0 || userSettings.ProviderID <= 0 {
 		return 0, logger.Errorf("invalid user ID or selected provider ID")
 	}
 
-	result, err := r.db.ExecContext(ctx, "INSERT INTO user_settings (user_id, selected_provider_id) VALUES ($1, $2)", userSettings.UserID, userSettings.SelectedProviderID)
+	result, err := r.db.ExecContext(ctx, "INSERT INTO profile_settings (profile_id, provider_id) VALUES ($1, $2)", userSettings.ProfileID, userSettings.ProviderID)
 	if err != nil {
 		return 0, logger.Errorf("failed to create user settings: %w", err)
 	}
@@ -285,21 +197,25 @@ func (r *SQLiteRepository) CreateUserSettings(ctx context.Context, userSettings 
 	return id, nil
 }
 
-func (r *SQLiteRepository) GetUserSettings(ctx context.Context, id int64) (*UserSettings, error) {
+func (r *SQLiteRepository) GetProfileSettingsWithKey(ctx context.Context, id int64) (*ProfileSettings, error) {
 	if id <= 0 {
 		return nil, logger.Errorf("invalid user ID")
 	}
 
-	var userSettings UserSettings
+	var userSettings ProfileSettings
 	err := r.db.QueryRowContext(ctx, `
-		SELECT us.user_id, us.selected_provider_id, p.name, p.base_url, p.selected_key_id, p.model, k.name, k.secret
-		FROM user_settings us
-		JOIN providers p ON us.selected_provider_id = p.id
-		JOIN provider_keys k ON p.selected_key_id = k.id
-		WHERE us.user_id = $1`, id).Scan(
-		&userSettings.UserID, &userSettings.SelectedProviderID, &userSettings.Name, &userSettings.BaseURL,
-		&userSettings.SelectedKeyID, &userSettings.Model, &userSettings.Key.Name, &userSettings.Secret,
-	)
+		SELECT p.name, p.base_url, p.model, k.name, k.secret
+		FROM profile_settings ps
+		JOIN providers p ON ps.provider_id = p.id
+		JOIN provider_keys k ON ps.provider_key_id = k.id
+		WHERE ps.profile_id = (
+			SELECT id
+			FROM profiles p
+			WHERE p.is_active = 1
+		)`, id).
+		Scan(
+			&userSettings.Provider.Name, &userSettings.BaseURL, &userSettings.Model, &userSettings.ProviderKey.Name, &userSettings.Secret,
+		)
 	if err != nil {
 		switch {
 		case err == sql.ErrNoRows:
@@ -310,21 +226,4 @@ func (r *SQLiteRepository) GetUserSettings(ctx context.Context, id int64) (*User
 	}
 
 	return &userSettings, nil
-}
-
-func (r *SQLiteRepository) UpdateUserSettings(ctx context.Context, userID int64, userSettings UpdateUserSettingsRequest) error {
-	if userID <= 0 || userSettings.SelectedProviderID <= 0 {
-		return logger.Errorf("invalid user ID or selected provider ID")
-	}
-
-	_, err := r.db.ExecContext(ctx, "UPDATE user_settings SET selected_provider_id = $1 WHERE user_id = $2", userSettings.SelectedProviderID, userID)
-	if err != nil {
-		return logger.Errorf("failed to update user settings: %w", err)
-	}
-
-	return nil
-}
-
-func (r *SQLiteRepository) Close() error {
-	return r.db.Close()
 }

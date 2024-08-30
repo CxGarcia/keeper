@@ -47,7 +47,11 @@ func Seed(ctx context.Context, db *sql.DB, repo *keeper.SQLiteRepository, regist
 		return logger.Errorf("failed to create tables: %v", err)
 	}
 
-	userID, err := repo.CreateUser(ctx, "Keeper")
+	userID, err := repo.CreateProfile(ctx, keeper.CreateProfileReq{
+		Name:      "default",
+		IsActive:  true,
+		IsDefault: true,
+	})
 	if err != nil {
 		return logger.Errorf("failed to create user: %v", err)
 	}
@@ -59,9 +63,9 @@ func Seed(ctx context.Context, db *sql.DB, repo *keeper.SQLiteRepository, regist
 
 	defaultProviderID := ps[0]
 
-	if _, err := repo.CreateUserSettings(ctx, keeper.UserSettings{
-		UserID:             userID,
-		SelectedProviderID: defaultProviderID,
+	if _, err := repo.CreateProfileSettings(ctx, keeper.ProfileSettings{
+		ProfileID:  userID,
+		ProviderID: defaultProviderID,
 	}); err != nil {
 		return logger.Errorf("failed to create user settings: %v", err)
 	}
@@ -70,7 +74,7 @@ func Seed(ctx context.Context, db *sql.DB, repo *keeper.SQLiteRepository, regist
 }
 func shouldSeed(db *sql.DB) bool {
 	rows, err := db.Query(
-		"SELECT name FROM sqlite_master WHERE type='table' AND name IN ('providers', 'user_settings', 'provider_keys')",
+		"SELECT name FROM sqlite_master WHERE type='table' AND name IN ('providers', 'profile_settings', 'provider_keys')",
 	)
 	if err != nil {
 		return true
