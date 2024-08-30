@@ -3,6 +3,7 @@ package keeper
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"keeper/internal/logger"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -80,11 +81,14 @@ func (r *SQLiteRepository) CreateProfile(ctx context.Context, req CreateProfileR
 
 // Key repository
 func (r *SQLiteRepository) CreateProviderKey(ctx context.Context, provider Provider, secret string) (int64, error) {
-	if secret == "" {
-		return 0, logger.Errorf("secret cannot be empty")
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, logger.Errorf("failed to begin transaction: %w", err)
 	}
+	defer tx.Rollback()
 
-	result, err := r.db.ExecContext(ctx, "INSERT INTO provider_keys (provider_id, name, secret) VALUES ($1, $2, $3)", provider.ID, provider.Name, secret)
+	// Insert the new provider key
+	result, err := tx.ExecContext(ctx, "INSERT INTO provider_keys (provider_id, name, secret) VALUES ($1, $2, $3)", provider.ID, provider.Name, secret)
 	if err != nil {
 		return 0, logger.Errorf("failed to create key: %w", err)
 	}
@@ -92,6 +96,35 @@ func (r *SQLiteRepository) CreateProviderKey(ctx context.Context, provider Provi
 	id, err := result.LastInsertId()
 	if err != nil {
 		return 0, logger.Errorf("failed to get last insert ID: %w", err)
+	}
+
+	// Check if the active profile has a provider key for this provider
+	var count int
+	err = tx.QueryRowContext(ctx, `
+        SELECT COUNT(*)
+        FROM profile_settings ps
+        JOIN profiles p ON ps.profile_id = p.id
+        WHERE p.is_active = 1 AND ps.provider_id = $1 AND ps.provider_key_id IS NOT NULL
+    `, provider.ID).Scan(&count)
+	if err != nil {
+		return 0, logger.Errorf("failed to check existing provider key: %w", err)
+	}
+
+	// If no provider key is set for the active profile, set this new key
+	if count == 0 {
+		_, err = tx.ExecContext(ctx, `
+            UPDATE profile_settings
+            SET provider_key_id = $1
+            WHERE profile_id = (SELECT id FROM profiles WHERE is_active = 1)
+            AND provider_id = $2
+        `, id, provider.ID)
+		if err != nil {
+			return 0, logger.Errorf("failed to update profile settings with new key: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, logger.Errorf("failed to commit transaction: %w", err)
 	}
 
 	return id, nil
@@ -157,13 +190,21 @@ func (r *SQLiteRepository) GetProviderByNameWithKey(ctx context.Context, name st
 	}
 
 	var provider Provider
+	var keyID sql.NullInt64
+	var keyName, secret sql.NullString
+
 	err := r.db.QueryRowContext(ctx, `
-		SELECT p.id, p.base_url, p.selected_key_id, p.model, k.name, k.secret
-		FROM providers p
-		JOIN provider_keys k ON p.selected_key_id = k.id
-		WHERE p.name = $1`, name).Scan(
-		&provider.ID, &provider.BaseURL, &provider.SelectedKeyID, &provider.Model, &provider.ProviderKey.Name, &provider.Secret,
+        SELECT p.id, p.name, p.base_url, p.model,
+               k.id, k.name, k.secret
+        FROM providers p
+        LEFT JOIN provider_keys k ON k.provider_id = p.id AND k.is_active = 1
+        WHERE p.name = $1
+        ORDER BY k.id DESC
+        LIMIT 1`, name).Scan(
+		&provider.ID, &provider.Name, &provider.BaseURL, &provider.Model,
+		&keyID, &keyName, &secret,
 	)
+
 	if err != nil {
 		switch {
 		case err == sql.ErrNoRows:
@@ -171,10 +212,18 @@ func (r *SQLiteRepository) GetProviderByNameWithKey(ctx context.Context, name st
 		default:
 			return nil, logger.Errorf("failed to get provider: %w", err)
 		}
-
 	}
 
-	provider.Name = name
+	if keyID.Valid {
+		provider.SelectedKeyID = new(string)
+		*provider.SelectedKeyID = fmt.Sprintf("%d", keyID.Int64)
+		provider.ProviderKey = ProviderKey{
+			ID:     keyID.Int64,
+			Name:   keyName.String,
+			Secret: secret.String,
+		}
+	}
+
 	return &provider, nil
 }
 
@@ -197,33 +246,58 @@ func (r *SQLiteRepository) CreateProfileSettings(ctx context.Context, userSettin
 	return id, nil
 }
 
-func (r *SQLiteRepository) GetProfileSettingsWithKey(ctx context.Context, id int64) (*ProfileSettings, error) {
-	if id <= 0 {
-		return nil, logger.Errorf("invalid user ID")
-	}
+func (r *SQLiteRepository) GetActiveProfileSettingsWithKey(ctx context.Context) (*ProfileSettings, error) {
 
-	var userSettings ProfileSettings
+	var settings ProfileSettings
+	var providerKeyID, providerID sql.NullInt64
+	var providerName, providerBaseURL, providerModel, keyName, keySecret sql.NullString
+
 	err := r.db.QueryRowContext(ctx, `
-		SELECT p.name, p.base_url, p.model, k.name, k.secret
+		SELECT ps.profile_id, ps.provider_id, ps.provider_key_id, p.name, p.base_url, p.model, k.name, k.secret
 		FROM profile_settings ps
-		JOIN providers p ON ps.provider_id = p.id
-		JOIN provider_keys k ON ps.provider_key_id = k.id
+		LEFT JOIN providers p ON ps.provider_id = p.id
+		LEFT JOIN provider_keys k ON ps.provider_key_id = k.id
 		WHERE ps.profile_id = (
 			SELECT id
-			FROM profiles p
-			WHERE p.is_active = 1
-		)`, id).
+			FROM profiles
+			WHERE is_active = 1
+			LIMIT 1
+		)`).
 		Scan(
-			&userSettings.Provider.Name, &userSettings.BaseURL, &userSettings.Model, &userSettings.ProviderKey.Name, &userSettings.Secret,
+			&settings.ProfileID, &providerID, &providerKeyID,
+			&providerName, &providerBaseURL, &providerModel,
+			&keyName, &keySecret,
 		)
+
 	if err != nil {
 		switch {
 		case err == sql.ErrNoRows:
-			return nil, logger.Errorf("user settings not found")
+			return nil, logger.Errorf("profile settings not found")
+
 		default:
-			return nil, logger.Errorf("failed to get user settings: %w", err)
+			return nil, logger.Errorf("failed to get profile settings: %w", err)
 		}
 	}
 
-	return &userSettings, nil
+	// Set Provider details if available
+	if providerID.Valid {
+		settings.ProviderID = providerID.Int64
+		settings.Provider = Provider{
+			ID:      providerID.Int64,
+			Name:    providerName.String,
+			BaseURL: providerBaseURL.String,
+			Model:   providerModel.String,
+		}
+	}
+
+	// Set ProviderKey details if available
+	if providerKeyID.Valid {
+		settings.Provider.ProviderKey = ProviderKey{
+			ID:     providerKeyID.Int64,
+			Name:   keyName.String,
+			Secret: keySecret.String,
+		}
+	}
+
+	return &settings, nil
 }

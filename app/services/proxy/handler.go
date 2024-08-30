@@ -46,17 +46,17 @@ func (h *Service) userSettingsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 
-		settings, err := h.keeper.GetProfileSettingsWithKey(ctx, 1)
+		settings, err := h.keeper.GetActiveProfileSettingsWithKey(ctx)
 		if err != nil {
 			http.Error(w, "failed to get user settings", http.StatusInternalServerError)
 
-			log.Errorf("failed to get user settings: %v", err)
+			log.Errorf("failed to get active profile settings: %v", err)
 
 			return
 		}
 
 		next.ServeHTTP(w, r.WithContext(
-			context.WithValue(ctx, "settings", settings),
+			context.WithValue(ctx, "settings", *settings),
 		))
 	})
 }
@@ -65,7 +65,8 @@ func (h *Service) apiKeyMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		settings, ok := r.Context().Value("settings").(keeper.ProfileSettings)
 		if !ok {
-			http.Error(w, "failed to get user settings", http.StatusInternalServerError)
+			http.Error(w, "failed to get active profile settings", http.StatusInternalServerError)
+
 			return
 		}
 
@@ -79,7 +80,7 @@ func (h *Service) proxyMiddleware(_ http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		settings, ok := r.Context().Value("settings").(keeper.ProfileSettings)
 		if !ok {
-			http.Error(w, "failed to get user settings", http.StatusInternalServerError)
+			http.Error(w, "failed to get active profile settings", http.StatusInternalServerError)
 
 			return
 		}
