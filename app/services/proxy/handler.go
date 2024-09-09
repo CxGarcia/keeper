@@ -2,7 +2,9 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"keeper/internal/logger"
 	log "keeper/internal/logger"
 	"keeper/services/keeper"
 	"net/http"
@@ -117,9 +119,26 @@ func (h *Service) proxyMiddleware(_ http.Handler) http.Handler {
 }
 
 func (h *Service) Start(addr string) error {
+	h.server.Addr = addr
+
+	url := url.URL{
+		Scheme: "https",
+		Host:   h.server.Addr,
+	}
+	res, err := http.Head(url.String())
+
+	logger.Errorf("%v %v", res, err)
+	switch {
+	case res != nil && res.StatusCode == http.StatusBadGateway:
+		// do nothing
+	case err != nil && errors.Is(err, http.ErrAbortHandler):
+		// do nothing
+	default:
+		return errors.New(fmt.Sprintf("address %s is already in use", h.server.Addr))
+	}
+
 	log.Infof("Starting server on %s", addr)
 
-	h.server.Addr = addr
 	if err := h.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return err
 	}
